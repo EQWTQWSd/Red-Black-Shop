@@ -1,0 +1,471 @@
+<!--
+===================
+backend.js (Node.js + Express) ตัวอย่าง backend แบบง่าย
+===================
+const express = require('express');
+const bodyParser = require('body-parser');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const app = express();
+app.use(bodyParser.json());
+
+let users = []; // เก็บ user (ตัวอย่าง)
+let orders = []; // เก็บ order (ตัวอย่าง)
+
+app.post('/api/register', (req, res) => {
+  const { username, email, password } = req.body;
+  if(users.find(u => u.email === email)) return res.status(400).json({ error: 'Email ซ้ำ' });
+  users.push({ username, email, password });
+  res.json({ success: true });
+});
+
+app.post('/api/login', (req, res) => {
+  const { email, password } = req.body;
+  const user = users.find(u => u.email === email && u.password === password);
+  if(!user) return res.status(401).json({ error: 'ผิดพลาดชื่อหรือรหัสผ่าน' });
+  res.json({ success: true, username: user.username });
+});
+
+app.post('/api/checkout', async (req, res) => {
+  const { cart } = req.body;
+  const line_items = cart.map(item => ({
+    price_data: {
+      currency: 'thb',
+      product_data: {
+        name: item,
+      },
+      unit_amount: 1000, // ตัวอย่างราคา 10.00 THB
+    },
+    quantity: 1,
+  }));
+
+  const session = await stripe.checkout.sessions.create({
+    payment_method_types: ['card'],
+    line_items,
+    mode: 'payment',
+    success_url: 'http://localhost:3000/success.html',
+    cancel_url: 'http://localhost:3000/cancel.html',
+  });
+
+  orders.push({ cart, sessionId: session.id });
+
+  res.json({ url: session.url });
+});
+
+app.listen(3001, () => console.log('Backend running on port 3001'));
+-->
+
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <title>Red & Black Web Shop (Demo)</title>
+  <style>
+    body {
+      margin: 0; font-family: Arial, sans-serif;
+      background: url('https://www.transparenttextures.com/patterns/black-linen.png') repeat,
+        linear-gradient(to bottom, rgba(0,0,0,0.6), rgba(0,0,0,0.9));
+      background-blend-mode: overlay;
+      color: white;
+      padding-bottom: 100px;
+    }
+    header, footer {
+      background-color: rgba(0,0,0,0.85);
+      padding: 1rem;
+      text-align: center;
+    }
+    nav a {
+      margin: 0 1rem;
+      color: red;
+      text-decoration: none;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    section {
+      max-width: 900px;
+      margin: 2rem auto;
+      background: rgba(255,255,255,0.1);
+      border-radius: 10px;
+      padding: 1rem 2rem;
+      display: none;
+    }
+    section.active { display: block; }
+    h2 { color: red; }
+    button {
+      background: red; color: black;
+      padding: 0.5rem 1rem;
+      border: none;
+      margin-top: 0.5rem;
+      cursor: pointer;
+      border-radius: 5px;
+    }
+    input, textarea {
+      padding: 0.5rem; border-radius: 5px;
+      border: none; width: 100%;
+      margin-top: 0.3rem;
+      font-size: 1rem;
+    }
+    .product-card {
+      background: rgba(255,255,255,0.15);
+      margin: 1rem 0;
+      padding: 1rem;
+      border-radius: 10px;
+    }
+    ul { padding-left: 1rem; }
+    #cart-list li {
+      margin: 0.5rem 0;
+    }
+    #message {
+      color: #ff6666;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🔥 Red & Black Shop (Demo) 🔥</h1>
+    <nav>
+      <a onclick="showSection('home')">หน้าหลัก</a>
+      <a onclick="showSection('products')">สินค้า</a>
+      <a onclick="showSection('cart')">ตะกร้า (<span id="cart-count">0</span>)</a>
+      <a onclick="showSection('login')">เข้าสู่ระบบ</a>
+      <a onclick="showSection('register')">สมัครสมาชิก</a>
+      <a onclick="showSection('contact')">ติดต่อ</a>
+      <a id="logout-link" style="display:none;" onclick="logout()">ออกจากระบบ</a>
+    </nav>
+  </header>
+
+  <section id="home" class="active">
+    <h2>ยินดีต้อนรับสู่ Red & Black Shop</h2>
+    <p>ร้านค้าออนไลน์ธีมแดงดำ ตัวอย่างระบบครบวงจร (Demo)</p>
+  </section>
+
+  <section id="products">
+    <h2>สินค้า
+      <select id ="category-filter" onchange="filterCategory(this.value)">
+        <option value="ทั้งหมด">ทั้งหมด</option>
+        <option value="ของเล่น">ของเล่น</option>
+        <option value="เสื้อผ้า">เสื้อผ้า</option>
+      </select>
+    </h2>
+    <div id="product-list"></div>
+  </section>
+
+  <section id="cart">
+    <h2>ตะกร้าสินค้า</h2>
+    <ul id="cart-list"><li>ยังไม่มีสินค้าในตะกร้า</li></ul>
+    <button onclick="checkout()" disabled id="checkout-btn">ชำระเงิน</button>
+  </section>
+  
+
+  <section id="login">
+    <h2>เข้าสู่ระบบ</h2>
+    <form id="login-form">
+      <label>อีเมล:<input type="email" id="login-email" required /></label>
+      <label>รหัสผ่าน:<input type="password" id="login-password" required /></label>
+      <button type="submit">เข้าสู่ระบบ</button>
+    </form>
+    <p id="login-msg" style="color:red;"></p>
+  </section>
+
+  <section id="register">
+    <h2>สมัครสมาชิก</h2>
+    <form id="register-form">
+      <label>ชื่อผู้ใช้:<input type="text" id="reg-username" required /></label>
+      <label>อีเมล:<input type="email" id="reg-email" required /></label>
+      <label>รหัสผ่าน:<input type="password" id="reg-password" required /></label>
+      <button type="submit">สมัครสมาชิก</button>
+    </form>
+    <p id="register-msg" style="color:red;"></p>
+  </section>
+
+  <section id="contact">
+    <h2>ติดต่อเรา</h2>
+    <form id="contact-form">
+      <label>ชื่อ:<input type="text" id="contact-name" required /></label>
+      <label>อีเมล:<input type="email" id="contact-email" required /></label>
+      <label>ข้อความ:<textarea id="contact-msg" rows="4" required></textarea></label>
+      <button type="submit">ส่งข้อความ</button>
+    </form>
+    <p id="contact-status" style="color:lime;"></p>
+  </section>
+
+  <footer>
+    <p>&copy; 2025 Red & Black Web Shop | Demo Version</p>
+  </footer>
+
+  <script>
+    // โครงสร้างข้อมูลจำลอง backend (ในจริงต้องแยก server)
+    let users = JSON.parse(localStorage.getItem('users') || '[]');
+    let orders = JSON.parse(localStorage.getItem('orders') || '[]');
+    let cart = JSON.parse(localStorage.getItem('cart') || '[]');
+    let currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
+
+    function logout() {
+      currentUser = null;
+      saveData();
+      alert('ออกจากระบบแล้ว');
+      document.getElementById('login-msg').textContent = '';
+      document.getElementById('logout-link').style.display = 'none';
+      showSection('home');
+    }
+
+    function saveData() {
+      localStorage.setItem('users', JSON.stringify(users));
+      localStorage.setItem('orders', JSON.stringify(orders));
+      localStorage.setItem('cart', JSON.stringify(cart));
+      localStorage.setItem('currentUser', JSON.stringify(currentUser));
+    }
+
+    function showAdminPanel() {
+      if (!currentUser || !currentUser.isAdmin) {
+        alert("คุณไม่ใช่ admin");
+        return;
+    }
+    
+    if (orders.length === 0){
+      document.getElementById('admin-orders').innerHTML = '<p>ยังไม่มีออเดอร์</p>';
+      return;
+    }
+
+    const html = orders.map((order, i) => {
+      return `<div style="margin-buttom:1rem;">
+        <b>Order #${i + 1}</b><br/>
+        ผู้ใช้: ${order.user}<br/>
+        วันที่: ${new Date(order.date).toLocaleString()}<br/>
+        สินค้า: <ul>${order.cart.map(p => `<li>${p.name} - ฿${p.price}</li>`).join('')}<ul>
+        ยอดรวม: ฿${order.total}
+        </div>`;
+      }).join('');
+
+      document.getElementById('admin-orders').innerHTML = html;
+    }
+
+    function showSection(id) {
+      document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+      if(id === 'cart') updateCartUI();
+      if(id === 'products') updateCartCount();
+    }
+
+    function updateCartCount() {
+      document.getElementById('cart-count').textContent = cart.length;
+    }
+
+    function updateCartUI() {
+      const list = document.getElementById('cart-list');
+      if(cart.length === 0) {
+        list.innerHTML = '<li>ยังไม่มีสินค้าในตะกร้า</li>';
+        document.getElementById('checkout-btn').disabled = true;
+      } else {
+        let total = 0;
+        list.innerHTML = cart.map((item, i) => {
+          total += item.price;
+          return `<li>${item.name} - ฿${item.price}
+            <button onclick="removeFromCart(${i})">ลบ</button></li>`;
+        }).join('');
+        list.innerHTML += `<li><b>รวมทั้งหมด: ฿${total}</b></li>`;
+        document.getElementById('checkout-btn').disabled = false;
+      }
+      updateCartCount();
+    }
+
+    function addToCart(product) {
+      cart.push(product);
+      saveData();
+      alert(`${product.name} ถูกเพิ่มในตะกร้า`);
+      updateCartCount();
+    }
+
+    function removeFromCart(index) {
+      cart.splice(index, 1);
+      saveData();
+      updateCartUI();
+    }
+
+    function showMyOrders() {
+      showSection('my-orders');
+      const myOrders = orders.filter(o => o.user === currentUser.email);
+      if (myOrders.length === 0) {
+        document.getElementById('my-order-list').innerHTML = '<p>ยังไม่มีคำสั่งซื้อ</p>';
+        return
+      }
+
+      const html = myOrders.map((order, i) => {
+        return `<div style="margin-bottom:1rem;">
+          <b>Order #${i + 1}</b><br/>
+          วันที่: ${new Date (order.date).toLocaleString()}<br/>
+          สินค้า: <ul>${order.cart.map(p => `<li>${p.name} - ฿${p.price}</li>`).join('')}</ul>
+          ยอดรวม: ฿${order.total}
+        </dive>`;
+      }).join('');
+
+      document.getElementById('my-order-list').innerHTML = html;
+    }
+
+    //สินค้าทั้งหมด
+    const productData = [
+      { name: 'หุ่นยนต์', price: 120, category: 'ของเล่น' },
+      { name: 'ลูกบอล', price: 90, category: 'ของเล่น' },
+      { name: 'เสื้อแดง', price: 120, category: 'เสื้อผ้า' },
+      { name: 'หมวกดำ', price: 80, category: 'เสื้อผ้า' }
+    ];
+
+    // ฟังชั่นสำหรับการแสดงสินค้า
+    function renderProducts(category = 'ทั้งหมด') {
+      const list = document.getElementById('product-list');
+      const filtered = category === 'ทั้งหมด'
+        ? productData
+        : productData.filter(p => p.category === category);
+
+      list.innerHTML = filtered.map(p => `
+      <div class="product-card">
+        <h3>${p.name}</h3>
+        <p>หมวดหมู่: ${p.category}</p>
+        <p>ราคา: ฿${p.price}</p>
+        <button onclick="addToCart(${JSON.stringify(p).replace(/"/g, '&quot;')})">ใส่ตะกร้า</button>
+      </div>
+      `).join('');
+    }
+
+    //ฟังก์ชันเมื่อเลือกหมวดหมู่
+    function filterCategory(cat) {
+      renderProducts(cat);
+    }
+    // สมัครสมาชิก
+    document.getElementById('register-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const username = document.getElementById('reg-username').value.trim();
+      const email = document.getElementById('reg-email').value.trim();
+      const password = document.getElementById('reg-password').value;
+      const msg = document.getElementById('register-msg');
+
+      if(users.find(u => u.email === email)) {
+        msg.textContent = 'อีเมลนี้มีในระบบแล้ว';
+        return;
+      }
+
+      users.push({ username, email, password, isAdmin: email === 'phoomdet.phetsuwan.mail@gmail.com' });
+      saveData();
+      msg.style.color = 'lime';
+      msg.textContent = 'สมัครสมาชิกสำเร็จ! กรุณาเข้าสู่ระบบ';
+      document.getElementById('register-form').reset();
+
+      if (user.isAdmin && !document.querySelector('nav a.admin-link')) {
+  const adminLink = document.createElement('a');
+  adminLink.textContent = 'จัดการระบบ';
+  adminLink.classList.add('admin-link');
+  adminLink.onclick = showAdminPanel;
+  document.querySelector('nav').appendChild(adminLink);
+}
+
+    });
+
+    // เข้าสู่ระบบ
+    document.getElementById('login-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const email = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-password').value;
+      const msg = document.getElementById('login-msg');
+
+      const user = users.find(u => u.email === email && u.password === password);
+      if(!user) {
+        msg.textContent = 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';
+        return;
+      }
+
+      if (currentUser && !currentUser.isAdmin) {
+        const orderLink = document.createElement('a');
+        orderLink.textContent = 'คำสั่งซื้อของฉัน';
+        orderLink.onclick = showMyOrders;
+        document.querySelector('nav').appendChild(orderLink);
+      }
+      currentUser = user;
+      saveData();
+      document.getElementById('logout-link').style.display = 'inline'; // ➕ แสดงปุ่ม logout
+      msg.style.color = 'lime';
+      msg.textContent = `ยินดีต้อนรับ, ${user.username}`;
+      document.getElementById('login-form').reset();
+      showSection('home');
+
+    });
+
+    // ส่งข้อความติดต่อ
+    document.getElementById('contact-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const name = document.getElementById('contact-name').value.trim();
+      const email = document.getElementById('contact-email').value.trim();
+      const message = document.getElementById('contact-msg').value.trim();
+      const status = document.getElementById('contact-status');
+
+      // ในระบบจริงจะส่งไป backend หรืออีเมล
+      status.textContent = 'ส่งข้อความเรียบร้อย ขอบคุณที่ติดต่อเรา!';
+      document.getElementById('contact-form').reset();
+    });
+
+    // เช็คเอาท์ (จำลอง) - ในระบบจริงต้องเชื่อม API ชำระเงินจริง
+    async function checkout() {
+  if (!currentUser) {
+    alert('กรุณาเข้าสู่ระบบก่อนชำระเงิน');
+    showSection('login');
+    return;
+  }
+
+  if (cart.length === 0) {
+    alert('ยังไม่มีสินค้าในตะกร้า');
+    return;
+  }
+
+  try {
+    const res = await fetch('http://localhost:3001/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cart })
+    });
+
+    const data = await res.json();
+
+    if (data.url) {
+      window.location.href = data.url; // 👉 ไปหน้า Stripe Checkout จริง
+    } else {
+      alert('เกิดข้อผิดพลาดระหว่างการชำระเงิน');
+    }
+  } catch (err) {
+    console.error(err);
+    alert('เกิดข้อผิดพลาดขณะเชื่อมต่อกับเซิร์ฟเวอร์');
+  }
+}
+
+
+    // โหลดข้อมูลเมื่อเปิดหน้า
+    window.onload = () => {
+      updateCartCount();
+      renderProducts();
+      if(currentUser) {
+        document.getElementById('login-msg').style.color = 'lime';
+        document.getElementById('login-msg').textContent = `ยินดีต้อนรับ, ${currentUser.username}`;
+        document.getElementById('logout-link').style.display = 'inline';
+
+        document.querySelector("nav a[onclick=\"showSection('login')\"]").style.display = 'none';
+        document.querySelector("nav a[onclick=\"showSection('register')\"]").style.display = 'none';
+        document.querySelector("nav a[onclick=\"showSection('login')\"]").style.display = 'inline';
+        document.querySelector("nav a[onclick=\"showSection('register')\"]").style.display = 'inline';
+      }
+
+      if (currentUser.isAdmin && !document.querySelector('nav a.admin-link')) {
+        const adminLink = document.createElement('a');
+        adminLink.textContent = 'จัดการระบบ';
+        adminLink.classList.add('admin-link');
+        adminLink.onclick = showAdminPanel;
+        document.querySelector('nav').appendChild(adminLink);
+      }
+    }
+  </script>
+</body>
+<section id="admin-panel">
+  <h2>Admin Panel</h2>
+  <div id="admin-orders"></div>
+  <section id="my-orders">
+    <h2>ประวัติคำสั่งซื้อของคุณ</h2>
+    <div id="my-order-list"></div>
+  </section>
+</html>
