@@ -5,6 +5,9 @@ require('dotenv').config();
 
 const admin = require('firebase-admin');
 
+// ✅ ใช้ ENV แทนการโหลดไฟล์ .json โดยตรง
+const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_KEY);
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: 'https://red-black-shop.firebaseio.com'
