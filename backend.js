@@ -1,18 +1,72 @@
+let users = [];
+let orders = [];
+let verificationTokens = {};
+
 require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
-console.log('STRIPE_SECRET_KEY =', process.env.STRIPE_SECRET_KEY);
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const cors = require('cors'); // ➕ สำคัญสำหรับ frontend
+const cors = require('cors');
+const path = require('path');
+const nodemailer = require('nodemailer');
+const { v4: uuidv4 } = require('uuid');
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'phoomdet.phetsuwan.mail@gmail.com',         
+    pass: 'tdtd vnnz ukwp qnel'             
+  }
+});
 
 const app = express();
-const path = require('path');
-app.use(express.static(path.join(__dirname, '.')));
-app.use(cors());  
+app.use(cors());
 app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname, '.')));
 
-let users = [];
-let orders = [];
+app.post('/api/register', (req, res) => {
+  const { username, email, password } = req.body;
+
+  if (users.find(u => u.email === email)) {
+    return res.status(400).json({ error: 'อีเมลนี้มีในระบบแล้ว' });
+  }
+
+  const token = uuidv4();
+  verificationTokens[token] = email;
+
+  users.push({ username, email, password, verified: false });
+
+  const verifyLink = `http://localhost:3001/api/verify-email?token=${token}`;
+  const mailOptions = {
+    from: '"Red & Black Shop" <phoomdet.phetsuwan.mail@gmail.com>',  // 🔁 แก้เป็นอีเมลคุณ
+    to: email,
+    subject: 'ยืนยันอีเมลของคุณ',
+    html: `<p>สวัสดีคุณ ${username},</p>
+           <p>กรุณาคลิกที่ลิงก์เพื่อยืนยันอีเมล:</p>
+           <a href="${verifyLink}">${verifyLink}</a>`
+  };
+
+  transporter.sendMail(mailOptions, (error, info) => {
+    if (error) {
+      console.error('ส่งอีเมลล้มเหลว:', error);
+      return res.status(500).json({ error: 'ส่งอีเมลล้มเหลว' });
+    }
+    res.json({ success: true, message: 'สมัครสำเร็จ กรุณายืนยันอีเมล' });
+  });
+});
+
+app.post('/api/login', (req, res) => {
+  const { email, password } = req.body;
+  const user = users.find(u => u.email === email && u.password === password);
+
+  if (!user) return res.status(401).json({ error: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
+
+  if (!user.verified) {
+    return res.status(403).json({ error: 'กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ' });
+  }
+
+  res.json({ success: true, username: user.username });
+});
 
 app.post('/api/checkout', async (req, res) => {
   const { cart } = req.body;
@@ -48,5 +102,23 @@ app.post('/api/checkout', async (req, res) => {
     res.status(500).json({ error: 'ไม่สามารถสร้าง session การชำระเงิน' });
   }
 });
+
+app.get('/api/verify-email', (req, res) => {
+  const { token } = req.query;
+  const email = verificationTokens[token];
+
+  if (!email) {
+    return res.status(400).send('ลิงก์ยืนยันไม่ถูกต้องหรือหมดอายุ');
+  }
+
+  const user = users.find(u => u.email === email);
+  if (!user) return res.status(404).send('ไม่พบผู้ใช้');
+
+  user.verified = true;
+  delete verificationTokens[token];
+
+  res.send('✅ ยืนยันอีเมลเรียบร้อยแล้ว คุณสามารถเข้าสู่ระบบได้');
+});
+
 
 app.listen(3001, () => console.log('Backend running on port 3001'));
