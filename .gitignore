@@ -7,3 +7,4 @@ build/
 npm install
 npm install nodemailer uuid
 npm install nodemailer
+npm install firebase-admin
