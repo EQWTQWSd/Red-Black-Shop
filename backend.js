@@ -78,7 +78,7 @@ app.post('/api/register', async (req, res) => {
     createdAt: new Date().toISOString()
   });
 
-  const verifyLink = `https://red-black-shop.onrender.com/api/verify-email?token=${token}`;
+  const verifyLink = `https://red-black-shop.onrender.com?verify_token=${token}`;
 
   const mailOptions = {
     from: '"Red & Black Shop" <phoomdet.phetsuwan.mail@gmail.com>',
