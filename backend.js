@@ -1,48 +1,84 @@
-let users = [];
-let orders = [];
-let verificationTokens = {};
-
-require('dotenv').config();
-const express = require('express');
-const bodyParser = require('body-parser');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const cors = require('cors');
-const path = require('path');
-const nodemailer = require('nodemailer');
 const { v4: uuidv4 } = require('uuid');
+const nodemailer = require('nodemailer');
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: 'phoomdet.phetsuwan.mail@gmail.com',         
-    pass: 'YOUR_APP_PASSWORD'             
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS
   }
 });
 
-const app = express();
-app.use(cors());
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, '.')));
+const admin = require('firebase-admin');
+const serviceAccount = require('./firebase-adminsdk.json'); // ชื่อไฟล์จริงของคุณ
 
-app.post('/api/register', (req, res) => {
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: 'https://red-black-shop.firebaseio.com' // เปลี่ยนตามของคุณ
+});
+
+const db = admin.firestore();
+const usersCollection = db.collection('users');
+
+require('dotenv').config();
+const express = require('express');
+const bodyParser = require('body-parser');
+console.log('STRIPE_SECRET_KEY =', process.env.STRIPE_SECRET_KEY);
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const cors = require('cors'); // ➕ สำคัญสำหรับ frontend
+
+const app = express();
+const path = require('path');
+app.use(express.static(path.join(__dirname, '.')));
+app.use(cors());  
+app.use(bodyParser.json());
+
+let users = [];
+let orders = [];
+const verificationTokens = {};
+app.get('/api/verify-email', async (req, res) => {
+  const { token } = req.query;
+  const email = verificationTokens[token];
+  if (!email) return res.status(400).send('ลิงก์ไม่ถูกต้องหรือหมดอายุ');
+
+  const snapshot = await usersCollection.where('email', '==', email).get();
+  if (snapshot.empty) return res.status(404).send('ไม่พบผู้ใช้');
+
+  const doc = snapshot.docs[0];
+  await usersCollection.doc(doc.id).update({ verified: true });
+
+  delete verificationTokens[token];
+  res.send('✅ ยืนยันอีเมลเรียบร้อยแล้ว คุณสามารถเข้าสู่ระบบได้');
+});
+
+app.post('/api/register', async (req, res) => {
   const { username, email, password } = req.body;
 
-  if (users.find(u => u.email === email)) {
+  // ตรวจซ้ำ
+  const snapshot = await usersCollection.where('email', '==', email).get();
+  if (!snapshot.empty) {
     return res.status(400).json({ error: 'อีเมลนี้มีในระบบแล้ว' });
   }
 
   const token = uuidv4();
   verificationTokens[token] = email;
 
-  users.push({ username, email, password, verified: false });
+  await usersCollection.add({
+    username,
+    email,
+    password,
+    verified: false,
+    createdAt: new Date().toISOString()
+  });
 
-  const verifyLink = `http://localhost:3001/api/verify-email?token=${token}`;
+  const verifyLink = `https://red-black-shop.onrender.com/api/verify-email?token=${token}`;
+
   const mailOptions = {
-    from: '"Red & Black Shop" <phoomdet.phetsuwan.mail@gmail.com>',  // 🔁 แก้เป็นอีเมลคุณ
+    from: '"Red & Black Shop" <phoomdet.phetsuwan.mail@gmail.com>',
     to: email,
     subject: 'ยืนยันอีเมลของคุณ',
     html: `<p>สวัสดีคุณ ${username},</p>
-           <p>กรุณาคลิกที่ลิงก์เพื่อยืนยันอีเมล:</p>
+           <p>กรุณาคลิกที่ลิงก์เพื่อยืนยัน:</p>
            <a href="${verifyLink}">${verifyLink}</a>`
   };
 
@@ -55,18 +91,25 @@ app.post('/api/register', (req, res) => {
   });
 });
 
-app.post('/api/login', (req, res) => {
+
+app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
-  const user = users.find(u => u.email === email && u.password === password);
 
-  if (!user) return res.status(401).json({ error: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
+  const snapshot = await usersCollection
+    .where('email', '==', email)
+    .where('password', '==', password)
+    .get();
 
-  if (!user.verified) {
+  if (snapshot.empty)
+    return res.status(401).json({ error: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
+
+  const user = snapshot.docs[0].data();
+  if (!user.verified)
     return res.status(403).json({ error: 'กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ' });
-  }
 
   res.json({ success: true, username: user.username });
 });
+
 
 app.post('/api/checkout', async (req, res) => {
   const { cart } = req.body;
@@ -102,23 +145,5 @@ app.post('/api/checkout', async (req, res) => {
     res.status(500).json({ error: 'ไม่สามารถสร้าง session การชำระเงิน' });
   }
 });
-
-app.get('/api/verify-email', (req, res) => {
-  const { token } = req.query;
-  const email = verificationTokens[token];
-
-  if (!email) {
-    return res.status(400).send('ลิงก์ยืนยันไม่ถูกต้องหรือหมดอายุ');
-  }
-
-  const user = users.find(u => u.email === email);
-  if (!user) return res.status(404).send('ไม่พบผู้ใช้');
-
-  user.verified = true;
-  delete verificationTokens[token];
-
-  res.send('✅ ยืนยันอีเมลเรียบร้อยแล้ว คุณสามารถเข้าสู่ระบบได้');
-});
-
 
 app.listen(3001, () => console.log('Backend running on port 3001'));
