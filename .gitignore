@@ -5,3 +5,4 @@ node_modules/
 dist/
 build/
 npm install
+npm install nodemailer uuid
