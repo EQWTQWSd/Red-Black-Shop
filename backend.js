@@ -1,3 +1,15 @@
+const bcrypt = require('bcrypt');
+
+// ✅ load dotenv ก่อนทุกอย่าง
+require('dotenv').config();
+
+const admin = require('firebase-admin');
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: 'https://red-black-shop.firebaseio.com'
+});
+
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
 
@@ -9,18 +21,9 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-const admin = require('firebase-admin');
-const serviceAccount = require('./firebase-adminsdk.json'); // ชื่อไฟล์จริงของคุณ
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: 'https://red-black-shop.firebaseio.com' // เปลี่ยนตามของคุณ
-});
-
 const db = admin.firestore();
 const usersCollection = db.collection('users');
 
-require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 console.log('STRIPE_SECRET_KEY =', process.env.STRIPE_SECRET_KEY);
@@ -54,11 +57,12 @@ app.get('/api/verify-email', async (req, res) => {
 app.post('/api/register', async (req, res) => {
   const { username, email, password } = req.body;
 
-  // ตรวจซ้ำ
   const snapshot = await usersCollection.where('email', '==', email).get();
   if (!snapshot.empty) {
     return res.status(400).json({ error: 'อีเมลนี้มีในระบบแล้ว' });
   }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
 
   const token = uuidv4();
   verificationTokens[token] = email;
@@ -66,7 +70,7 @@ app.post('/api/register', async (req, res) => {
   await usersCollection.add({
     username,
     email,
-    password,
+    password: hashedPassword,
     verified: false,
     createdAt: new Date().toISOString()
   });
@@ -95,20 +99,25 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
 
-  const snapshot = await usersCollection
-    .where('email', '==', email)
-    .where('password', '==', password)
-    .get();
+  const snapshot = await usersCollection.where('email', '==', email).get();
 
   if (snapshot.empty)
     return res.status(401).json({ error: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
 
-  const user = snapshot.docs[0].data();
+  const userDoc = snapshot.docs[0];
+  const user = userDoc.data();
+
+  const passwordMatch = await bcrypt.compare(password, user.password);
+  if (!passwordMatch) {
+    return res.status(401).json({ error: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' });
+  }
+
   if (!user.verified)
     return res.status(403).json({ error: 'กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ' });
 
   res.json({ success: true, username: user.username });
 });
+
 
 
 app.post('/api/checkout', async (req, res) => {
@@ -133,8 +142,8 @@ app.post('/api/checkout', async (req, res) => {
       payment_method_types: ['card'],
       line_items,
       mode: 'payment',
-      success_url: 'http://localhost:3000/success.html',
-      cancel_url: 'http://localhost:3000/cancel.html',
+      success_url: 'https://red-black-shop.onrender.com/success.html',
+      cancel_url: 'https://red-black-shop.onrender.com/cancel.html',
     });
 
     orders.push({ cart, sessionId: session.id, date: new Date() });
