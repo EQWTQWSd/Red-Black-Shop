@@ -8,4 +8,5 @@ npm install
 npm install nodemailer uuid
 npm install nodemailer
 npm install firebase-admin
-.json
+npm install bcrypt
+red-black-shop-firebase-adminsdk-fbsvc-eafa820ea6.json
